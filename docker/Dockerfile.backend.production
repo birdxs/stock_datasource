@@ -1,0 +1,76 @@
+# docker/Dockerfile.backend
+
+# ==================== Base Stage ====================
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Set timezone to Asia/Shanghai
+ENV TZ=Asia/Shanghai
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+ENV UV_INDEX_URL=${UV_INDEX_URL}
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# Install system dependencies
+RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libffi-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for faster dependency management
+RUN pip install uv
+
+# ==================== Dependencies Stage ====================
+FROM base AS deps
+
+WORKDIR /app
+
+# Copy dependency files and README (required by pyproject.toml)
+COPY pyproject.toml uv.lock README.md ./
+
+# Install production dependencies only
+RUN uv sync --frozen --no-dev
+
+# ==================== Production Stage ====================
+FROM deps AS production
+
+WORKDIR /app
+
+# Copy source code
+COPY src/ ./src/
+COPY cli.py ./
+
+# Install project package after source is available
+RUN uv sync --frozen --no-dev
+
+# Ensure optional market data providers required by plugins are available
+RUN uv pip install --python /app/.venv/bin/python --no-cache-dir yfinance finnhub-python
+
+# Expose port (default 6666)
+EXPOSE 6666
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD curl -f http://localhost:6666/health || exit 1
+
+CMD ["uv", "run", "uvicorn", "stock_datasource.services.http_server:app", "--host", "0.0.0.0", "--port", "6666"]
+
+# ==================== Development Stage ====================
+FROM deps AS development
+
+WORKDIR /app
+
+# Install dev dependencies
+RUN uv sync --frozen
+
+# Copy source code
+COPY src/ ./src/
+COPY cli.py ./
+
+CMD ["uv", "run", "uvicorn", "stock_datasource.services.http_server:app", "--reload", "--host", "0.0.0.0", "--port", "6666"]
