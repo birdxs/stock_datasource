@@ -1,4 +1,4 @@
-name: New Build frontend 编译arm64、amd64架构镜像同时推送至ghcr和dockerhub
+name: kimi优化 Build frontend 编译arm64、amd64架构镜像同时推送至ghcr和dockerhub
 
 on:
   workflow_dispatch:
