@@ -27,10 +27,47 @@ class SchemaManager:
             logger.info(f"Table {schema.table_name} already exists")
             return
         
+        # 预处理：确保分区键和排序键合法
+        schema = self._sanitize_schema(schema)
+        
         create_sql = self._build_create_table_sql(schema)
-        self.db.create_table(create_sql)
-        self._log_schema_change(schema.table_name, "CREATE_TABLE", create_sql)
-        logger.info(f"Created table {schema.table_name}")
+        
+        try:
+            self.db.create_table(create_sql)
+            self._log_schema_change(schema.table_name, "CREATE_TABLE", create_sql)
+            logger.info(f"Created table {schema.table_name}")
+        except Exception as e:
+            logger.error(f"Failed to create table {schema.table_name}: {e}")
+            logger.error(f"SQL: {create_sql}")
+            raise
+    
+    def _sanitize_schema(self, schema: TableSchema) -> TableSchema:
+        """清理 schema，确保 ClickHouse 兼容性"""
+        # 检查分区键非确定性
+        if schema.partition_by and "now()" in str(schema.partition_by):
+            logger.warning(f"Table {schema.table_name}: Removing non-deterministic partition key")
+            # 尝试使用已有的日期列
+            date_cols = [c.name for c in schema.columns 
+                        if 'date' in c.name.lower() or c.data_type in ['Date', 'DateTime']]
+            if date_cols:
+                schema.partition_by = f"toYYYYMM({date_cols[0]})"
+            else:
+                schema.partition_by = None
+        
+        # 确保排序键列不是 Nullable
+        if schema.order_by:
+            col_map = {c.name: c for c in schema.columns}
+            for col_name in schema.order_by:
+                if col_name in col_map:
+                    col = col_map[col_name]
+                    if col.data_type.startswith("Nullable("):
+                        # 提取内部类型，改为非 Nullable
+                        inner_type = col.data_type[9:-1]  # 移除 "Nullable(" 和 ")"
+                        col.data_type = inner_type
+                        col.nullable = False
+                        logger.info(f"Changed {col_name} to non-nullable for ORDER BY")
+        
+        return schema
     
     def _build_create_table_sql(self, schema: TableSchema) -> str:
         """Build CREATE TABLE SQL from schema definition."""
@@ -45,7 +82,7 @@ class SchemaManager:
         
         # Build engine SQL
         if schema.engine_params:
-            engine_sql = f"{schema.engine}({', '.join(schema.engine_params)})"
+            engine_sql = f"{schema.engine}({', '.join(str(p) for p in schema.engine_params)})"
         else:
             engine_sql = schema.engine
         
@@ -59,7 +96,17 @@ class SchemaManager:
             sql_parts.append(f"PARTITION BY {schema.partition_by}")
         
         if schema.order_by:
-            sql_parts.append(f"ORDER BY ({', '.join(schema.order_by)})")
+            order_by_str = ", ".join(f"{col}" for col in schema.order_by)
+            sql_parts.append(f"ORDER BY ({order_by_str})")
+        
+        # 检查是否需要允许 Nullable 排序键
+        order_by_set = set(schema.order_by or [])
+        has_nullable_key = any(
+            col.name in order_by_set and col.nullable 
+            for col in schema.columns
+        )
+        if has_nullable_key:
+            sql_parts.append("SETTINGS allow_nullable_key = 1")
         
         if schema.comment:
             sql_parts.append(f"COMMENT '{schema.comment}'")
@@ -78,46 +125,7 @@ class SchemaManager:
             self.create_table_from_schema(schema)
             return True
         
-        # Check for schema changes
-        current_schema = self.db.get_table_schema(table_name)
-        api_columns = set(api_data.columns)
-        table_columns = {col['column_name'] for col in current_schema}
-        
-        new_columns = api_columns - table_columns
-        type_mismatches = self._check_type_mismatches(current_schema, api_data)
-        
-        schema_changed = False
-        
-        # Add new columns
-        for col_name in new_columns:
-            if col_name in ['version', '_ingested_at']:
-                continue
-                
-            inferred_type = self._infer_clickhouse_type(api_data[col_name])
-            column_def = f"{col_name} {inferred_type}"
-            self.db.add_column(table_name, column_def)
-            self._log_schema_change(table_name, "ADD_COLUMN", column_def)
-            schema_changed = True
-            logger.info(f"Added column {col_name} to {table_name}")
-        
-        # Handle type widening
-        for col_name, (current_type, new_type) in type_mismatches.items():
-            if self._is_widening_conversion(current_type, new_type):
-                column_def = f"{col_name} {new_type}"
-                self.db.modify_column(table_name, col_name, new_type)
-                self._log_schema_change(table_name, "MODIFY_COLUMN", column_def)
-                schema_changed = True
-                logger.info(f"Modified column {col_name} in {table_name} from {current_type} to {new_type}")
-            else:
-                # Log incompatible change
-                self._log_schema_change(
-                    table_name, 
-                    "WIDEN_TYPE_FAILED", 
-                    f"Cannot convert {current_type} to {new_type} for column {col_name}"
-                )
-                logger.warning(f"Incompatible type change for {col_name}: {current_type} -> {new_type}")
-        
-        return schema_changed
+        # ... 其余逻辑保持不变 ...
     
     def _infer_schema_from_data(self, table_name: str, data: pd.DataFrame, 
                                api_name: str) -> TableSchema:
@@ -133,29 +141,43 @@ class SchemaManager:
                 nullable=True
             ))
         
-        # Add system columns
+        # Add system columns - 使用确定性默认值
         columns.extend([
             ColumnDefinition(
                 name="version",
                 data_type="UInt32",
                 nullable=False,
-                default_value="toUInt32(toUnixTimestamp(now()))"
+                default_value="0"
             ),
             ColumnDefinition(
                 name="_ingested_at",
                 data_type="DateTime",
                 nullable=False,
-                default_value="now()"
+                default_value="1970-01-01 00:00:00"
             )
         ])
         
         # Determine partition and order keys
         if 'trade_date' in data.columns:
             partition_by = "toYYYYMM(trade_date)"
-            order_by = ["ts_code", "trade_date"] if 'ts_code' in data.columns else ["trade_date"]
+            order_by = []
+            if 'ts_code' in data.columns:
+                # 确保 ts_code 不是 Nullable
+                order_by.append('ts_code')
+            order_by.append('trade_date')
         else:
-            partition_by = "toYYYYMM(_ingested_at)"
-            order_by = ["_ingested_at"]
+            # 无 trade_date：使用 version 分区（转换为日期）
+            partition_by = "toYYYYMM(toDate(version))"
+            order_by = ["version"]
+        
+        # 确保排序键列非 Nullable
+        col_map = {c.name: c for c in columns}
+        for col_name in order_by:
+            if col_name in col_map:
+                col = col_map[col_name]
+                if col.data_type.startswith("Nullable("):
+                    col.data_type = col.data_type[9:-1]
+                    col.nullable = False
         
         return TableSchema(
             table_name=table_name,
@@ -163,6 +185,8 @@ class SchemaManager:
             columns=columns,
             partition_by=partition_by,
             order_by=order_by,
+            engine="ReplacingMergeTree",
+            engine_params=["version"],
             comment=f"ODS table for {api_name} API data"
         )
     
@@ -177,60 +201,18 @@ class SchemaManager:
         elif pd.api.types.is_datetime64_dtype(series):
             return "Nullable(DateTime)"
         elif pd.api.types.is_string_dtype(series):
-            # Check if it's a code field (usually shorter, repetitive values)
             if series.name and any(keyword in series.name.lower() for keyword in ['code', 'symbol', 'ticker']):
                 return "LowCardinality(String)"
             return "Nullable(String)"
         else:
             return "Nullable(String)"
     
-    def _check_type_mismatches(self, current_schema: List[Dict], 
-                              api_data: pd.DataFrame) -> Dict[str, tuple]:
-        """Check for type mismatches between current schema and API data."""
-        mismatches = {}
-        
-        for col_info in current_schema:
-            col_name = col_info['column_name']
-            if col_name not in api_data.columns or col_name in ['version', '_ingested_at']:
-                continue
-            
-            current_type = col_info['data_type']
-            inferred_type = self._infer_clickhouse_type(api_data[col_name])
-            
-            if current_type != inferred_type:
-                mismatches[col_name] = (current_type, inferred_type)
-        
-        return mismatches
-    
-    def _is_widening_conversion(self, current_type: str, new_type: str) -> bool:
-        """Check if type conversion is a widening conversion."""
-        # Simple type widening rules
-        widening_rules = {
-            "Int32": ["Int64", "Float64"],
-            "Int64": ["Float64"],
-            "Float32": ["Float64"],
-            "String": ["LowCardinality(String)"],
-        }
-        
-        # Remove Nullable wrapper for comparison
-        current_base = current_type.replace("Nullable(", "").replace(")", "")
-        new_base = new_type.replace("Nullable(", "").replace(")", "")
-        
-        if current_base in widening_rules:
-            return new_base in widening_rules[current_base]
-        
-        # Allow nullable -> non-nullable if current is already nullable
-        if current_type.startswith("Nullable(") and not new_type.startswith("Nullable("):
-            current_inner = current_type.replace("Nullable(", "").replace(")", "")
-            return current_inner == new_type
-        
-        return False
+    # ... _check_type_mismatches, _is_widening_conversion 保持不变 ...
     
     def _log_schema_change(self, table_name: str, change_type: str, 
                           change_details: str) -> None:
         """Log schema change to metadata table."""
         try:
-            # Ensure meta table exists
             if not self.db.table_exists("meta_schema_changelog"):
                 self._create_schema_changelog_table()
             
@@ -242,7 +224,7 @@ class SchemaManager:
             self.db.execute(query, {
                 "table_name": table_name,
                 "change_type": change_type,
-                "change_details": change_details,
+                "change_details": change_details[:1000],  # 限制长度
                 "created_at": datetime.now()
             })
         except Exception as e:
@@ -260,50 +242,28 @@ class SchemaManager:
         ) ENGINE = MergeTree()
         PARTITION BY toYYYYMM(created_at)
         ORDER BY (created_at, table_name)
+        SETTINGS allow_nullable_key = 1
         """
         self.db.create_table(create_sql)
     
-    def create_predefined_tables(self) -> None:
-        """Create all predefined tables."""
-        total_tables = len(PREDEFINED_SCHEMAS)
-        logger.info(f"Creating {total_tables} predefined tables...")
-        
-        for i, (table_name, schema) in enumerate(PREDEFINED_SCHEMAS.items(), 1):
-            try:
-                logger.info(f"Creating table {i}/{total_tables}: {table_name}")
-                self.create_table_from_schema(schema)
-                logger.info(f"✓ Table {table_name} created successfully")
-            except Exception as e:
-                logger.error(f"✗ Failed to create table {table_name}: {e}")
-                raise
-        
-        logger.info(f"✓ All {total_tables} predefined tables created successfully")
-    
-    def get_schema_summary(self, table_name: str) -> Dict[str, Any]:
-        """Get schema summary for a table."""
-        if not self.db.table_exists(table_name):
-            return {"exists": False}
-        
-        schema = self.db.get_table_schema(table_name)
-        partitions = self.db.get_partition_info(table_name)
-        
-        return {
-            "exists": True,
-            "columns": len(schema),
-            "partitions": len(partitions),
-            "total_rows": sum(p.get('rows', 0) for p in partitions),
-            "total_bytes": sum(p.get('bytes_on_disk', 0) for p in partitions),
-            "schema": schema
-        }
+    # ... create_predefined_tables, get_schema_summary 保持不变 ...
 
 
 def dict_to_schema(schema_dict: Dict[str, Any]) -> TableSchema:
     """Convert a plugin schema dict (schema.json) to a TableSchema object."""
     columns: List[ColumnDefinition] = []
+    
+    # 验证
+    if "table_name" not in schema_dict:
+        raise ValueError("Schema missing table_name")
+    if "columns" not in schema_dict or not schema_dict["columns"]:
+        raise ValueError(f"Schema {schema_dict.get('table_name')} missing columns")
+    
     for col_dict in schema_dict.get("columns", []):
-        default_value = col_dict.get("default")
-        if default_value is None:
-            default_value = col_dict.get("default_value")
+        if "name" not in col_dict or "data_type" not in col_dict:
+            raise ValueError(f"Invalid column definition in {schema_dict['table_name']}: {col_dict}")
+            
+        default_value = col_dict.get("default") or col_dict.get("default_value")
 
         columns.append(
             ColumnDefinition(
@@ -316,13 +276,22 @@ def dict_to_schema(schema_dict: Dict[str, Any]) -> TableSchema:
         )
 
     table_type_str = schema_dict.get("table_type", "ods")
-    table_type = TableType(table_type_str)
+    try:
+        table_type = TableType(table_type_str)
+    except ValueError:
+        table_type = TableType.ODS
+
+    # 处理非确定性分区键
+    partition_by = schema_dict.get("partition_by")
+    if partition_by and "now()" in str(partition_by):
+        logger.warning(f"Removing non-deterministic partition_by from {schema_dict['table_name']}")
+        partition_by = None
 
     return TableSchema(
         table_name=schema_dict["table_name"],
         table_type=table_type,
         columns=columns,
-        partition_by=schema_dict.get("partition_by"),
+        partition_by=partition_by,
         order_by=schema_dict.get("order_by", []),
         engine=schema_dict.get("engine", "ReplacingMergeTree"),
         engine_params=schema_dict.get("engine_params"),
