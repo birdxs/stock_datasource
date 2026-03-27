@@ -11,7 +11,7 @@ class RtEtfMinService(BaseService):
     
     table_name = "ods_rt_etf_min"
 
-	def __init__(self, plugin_name: str = "tushare_rt_etf_min"): 
+    def __init__(self, plugin_name: str = "tushare_rt_etf_min"): 
         super().__init__(plugin_name=plugin_name)    
     
     @query_method(
