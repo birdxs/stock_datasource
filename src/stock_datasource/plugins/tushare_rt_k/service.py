@@ -12,7 +12,6 @@ class RtKService(BaseService):
     table_name = "ods_rt_k"
     
     @query_method(
-        name="get_latest_quote",
         description="获取指定股票的最新实时行情",
         params=[
             QueryParam(name="ts_code", type="str", required=True, description="股票代码")
@@ -45,7 +44,6 @@ class RtKService(BaseService):
         return None
     
     @query_method(
-        name="get_market_quotes",
         description="获取市场实时行情（按涨跌幅排序）",
         params=[
             QueryParam(name="market", type="str", required=False, description="市场(SH/SZ/BJ)"),
@@ -96,7 +94,6 @@ class RtKService(BaseService):
         return [dict(zip(columns, row)) for row in result]
     
     @query_method(
-        name="get_top_gainers",
         description="获取涨幅榜",
         params=[
             QueryParam(name="market", type="str", required=False, description="市场(SH/SZ/BJ)"),
@@ -120,7 +117,6 @@ class RtKService(BaseService):
         return self.get_market_quotes(market=market, limit=limit)
     
     @query_method(
-        name="get_top_losers",
         description="获取跌幅榜",
         params=[
             QueryParam(name="market", type="str", required=False, description="市场(SH/SZ/BJ)"),
@@ -171,7 +167,6 @@ class RtKService(BaseService):
         return [dict(zip(columns, row)) for row in result]
     
     @query_method(
-        name="get_top_volume",
         description="获取成交量排行榜",
         params=[
             QueryParam(name="market", type="str", required=False, description="市场(SH/SZ/BJ)"),
@@ -221,7 +216,6 @@ class RtKService(BaseService):
         return [dict(zip(columns, row)) for row in result]
     
     @query_method(
-        name="get_market_overview",
         description="获取市场整体概览",
         params=[]
     )
