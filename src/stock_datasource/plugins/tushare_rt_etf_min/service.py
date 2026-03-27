@@ -10,6 +10,9 @@ class RtEtfMinService(BaseService):
     """Query service for ETF realtime minute K-line data."""
     
     table_name = "ods_rt_etf_min"
+
+	def __init__(self, plugin_name: str = "tushare_rt_etf_min"): 
+        super().__init__(plugin_name=plugin_name)    
     
     @query_method(
         description="获取指定ETF的最新分钟K线数据",
