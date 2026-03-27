@@ -1,143 +1,137 @@
 """TuShare rt_etf_min (ETF实时分钟K线) query service."""
 
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from stock_datasource.core.base_service import BaseService, query_method, QueryParam
 
 
 class RtEtfMinService(BaseService):
-    """Query service for ETF realtime minute K-line data."""
+    """Query service for ETF real-time minute data."""
     
     table_name = "ods_rt_etf_min"
     
     @query_method(
-        name="get_latest_etf_minute_kline",
-        description="获取指定ETF的最新分钟K线数据",
+        description="获取ETF实时分钟K线数据",
         params=[
             QueryParam(name="ts_code", type="str", required=True, description="ETF代码"),
             QueryParam(name="freq", type="str", required=False, description="K线频率(1MIN/5MIN/15MIN/30MIN/60MIN)"),
+            QueryParam(name="start_time", type="str", required=False, description="开始时间"),
+            QueryParam(name="end_time", type="str", required=False, description="结束时间"),
             QueryParam(name="limit", type="int", required=False, description="返回记录数限制")
         ]
     )
-    def get_latest_etf_minute_kline(
-        self, 
-        ts_code: str, 
+    def get_etf_mins(
+        self,
+        ts_code: str,
         freq: str = "1MIN",
-        limit: int = 60
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        limit: int = 1000
     ) -> List[Dict[str, Any]]:
-        """Get latest minute K-line data for an ETF."""
+        """Get ETF minute K-line data."""
+        params = {
+            "ts_code": ts_code,
+            "freq": freq,
+            "limit": int(limit)
+        }
+        
+        time_filter = ""
+        if start_time:
+            time_filter += " AND trade_time >= %(start_time)s"
+            params["start_time"] = start_time
+        if end_time:
+            time_filter += " AND trade_time <= %(end_time)s"
+            params["end_time"] = end_time
+        
+        sql = f"""
+            SELECT ts_code, freq, trade_time, open, close, high, low, vol, amount
+            FROM {self.table_name}
+            WHERE ts_code = %(ts_code)s AND freq = %(freq)s
+            {time_filter}
+            ORDER BY trade_time DESC
+            LIMIT %(limit)s
+        """
+        result = self.client.execute(sql, params)
+        
+        columns = ["ts_code", "freq", "trade_time", "open", "close", "high", "low", "vol", "amount"]
+        return [dict(zip(columns, row)) for row in result]
+    
+    @query_method(
+        description="获取ETF最新N条分钟数据",
+        params=[
+            QueryParam(name="ts_code", type="str", required=True, description="ETF代码"),
+            QueryParam(name="freq", type="str", required=False, description="K线频率"),
+            QueryParam(name="count", type="int", required=False, description="返回条数")
+        ]
+    )
+    def get_latest_etf_mins(
+        self,
+        ts_code: str,
+        freq: str = "1MIN",
+        count: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Get latest N ETF minute records."""
         sql = f"""
             SELECT ts_code, freq, trade_time, open, close, high, low, vol, amount
             FROM {self.table_name}
             WHERE ts_code = %(ts_code)s AND freq = %(freq)s
             ORDER BY trade_time DESC
-            LIMIT %(limit)s
-        """
-        result = self.client.execute(sql, {
-            "ts_code": ts_code, 
-            "freq": freq.upper(),
-            "limit": int(limit)
-        })
-        
-        columns = ["ts_code", "freq", "trade_time", "open", "close", "high", "low", "vol", "amount"]
-        return [dict(zip(columns, row)) for row in result]
-    
-    @query_method(
-        name="get_etf_minute_kline_by_date",
-        description="获取指定ETF某日的分钟K线数据",
-        params=[
-            QueryParam(name="ts_code", type="str", required=True, description="ETF代码"),
-            QueryParam(name="trade_date", type="str", required=True, description="交易日期(YYYYMMDD)"),
-            QueryParam(name="freq", type="str", required=False, description="K线频率")
-        ]
-    )
-    def get_etf_minute_kline_by_date(
-        self, 
-        ts_code: str, 
-        trade_date: str,
-        freq: str = "1MIN"
-    ) -> List[Dict[str, Any]]:
-        """Get minute K-line data for an ETF on a specific date."""
-        sql = f"""
-            SELECT ts_code, freq, trade_time, open, close, high, low, vol, amount
-            FROM {self.table_name}
-            WHERE ts_code = %(ts_code)s 
-              AND freq = %(freq)s
-              AND toYYYYMMDD(trade_time) = %(trade_date)s
-            ORDER BY trade_time ASC
+            LIMIT %(count)s
         """
         result = self.client.execute(sql, {
             "ts_code": ts_code,
-            "freq": freq.upper(),
-            "trade_date": int(trade_date)
+            "freq": freq,
+            "count": int(count)
         })
         
         columns = ["ts_code", "freq", "trade_time", "open", "close", "high", "low", "vol", "amount"]
         return [dict(zip(columns, row)) for row in result]
     
     @query_method(
-        name="get_etf_minute_snapshot",
-        description="获取多只ETF最新一根分钟K线快照",
+        description="获取ETF分钟数据统计摘要",
         params=[
-            QueryParam(name="ts_codes", type="str", required=True, description="ETF代码列表(逗号分隔)"),
-            QueryParam(name="freq", type="str", required=False, description="K线频率")
+            QueryParam(name="ts_code", type="str", required=False, description="ETF代码(可选)")
         ]
     )
-    def get_etf_minute_snapshot(
-        self, 
-        ts_codes: str,
-        freq: str = "1MIN"
-    ) -> List[Dict[str, Any]]:
-        """Get latest minute snapshot for multiple ETFs."""
-        code_list = [c.strip() for c in ts_codes.split(",") if c.strip()]
+    def get_etf_mins_summary(self, ts_code: Optional[str] = None) -> Dict[str, Any]:
+        """Get ETF minute data summary."""
+        ts_filter = ""
+        params = {}
         
-        sql = f"""
-            SELECT ts_code, freq, trade_time, open, close, high, low, vol, amount
-            FROM {self.table_name}
-            WHERE ts_code IN %(ts_codes)s
-              AND freq = %(freq)s
-              AND trade_time = (
-                  SELECT max(trade_time) FROM {self.table_name}
-                  WHERE freq = %(freq)s
-              )
-            ORDER BY ts_code
-        """
-        result = self.client.execute(sql, {
-            "ts_codes": code_list,
-            "freq": freq.upper()
-        })
+        if ts_code:
+            ts_filter = "WHERE ts_code = %(ts_code)s"
+            params["ts_code"] = ts_code
         
-        columns = ["ts_code", "freq", "trade_time", "open", "close", "high", "low", "vol", "amount"]
-        return [dict(zip(columns, row)) for row in result]
-    
-    @query_method(
-        name="get_etf_minute_stats",
-        description="获取ETF分钟K线数据统计",
-        params=[
-            QueryParam(name="freq", type="str", required=False, description="K线频率")
-        ]
-    )
-    def get_etf_minute_stats(self, freq: str = "1MIN") -> Dict[str, Any]:
-        """Get statistics about stored ETF minute K-line data."""
         sql = f"""
             SELECT 
                 count() as total_records,
-                uniq(ts_code) as unique_etfs,
+                count(DISTINCT ts_code) as etf_count,
                 min(trade_time) as earliest_time,
-                max(trade_time) as latest_time
+                max(trade_time) as latest_time,
+                countIf(freq = '1MIN') as mins_1,
+                countIf(freq = '5MIN') as mins_5,
+                countIf(freq = '15MIN') as mins_15,
+                countIf(freq = '30MIN') as mins_30,
+                countIf(freq = '60MIN') as mins_60
             FROM {self.table_name}
-            WHERE freq = %(freq)s
+            {ts_filter}
         """
-        result = self.client.execute(sql, {"freq": freq.upper()})
+        result = self.client.execute(sql, params)
         
         if result:
             row = result[0]
             return {
                 "total_records": row[0],
-                "unique_etfs": row[1],
+                "etf_count": row[1],
                 "earliest_time": row[2],
                 "latest_time": row[3],
-                "freq": freq.upper()
+                "by_freq": {
+                    "1MIN": row[4],
+                    "5MIN": row[5],
+                    "15MIN": row[6],
+                    "30MIN": row[7],
+                    "60MIN": row[8]
+                }
             }
         return {}
