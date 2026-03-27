@@ -12,7 +12,6 @@ class RtMinService(BaseService):
     table_name = "ods_rt_min"
     
     @query_method(
-        name="get_latest_minute_kline",
         description="获取指定股票的最新分钟K线数据",
         params=[
             QueryParam(name="ts_code", type="str", required=True, description="股票代码"),
@@ -53,7 +52,6 @@ class RtMinService(BaseService):
         return [dict(zip(columns, row)) for row in result]
     
     @query_method(
-        name="get_minute_kline_by_date",
         description="获取指定股票某日的分钟K线数据",
         params=[
             QueryParam(name="ts_code", type="str", required=True, description="股票代码"),
@@ -95,7 +93,6 @@ class RtMinService(BaseService):
         return [dict(zip(columns, row)) for row in result]
     
     @query_method(
-        name="get_minute_snapshot",
         description="获取多只股票最新一根分钟K线快照",
         params=[
             QueryParam(name="ts_codes", type="str", required=True, description="股票代码列表(逗号分隔)"),
@@ -138,7 +135,6 @@ class RtMinService(BaseService):
         return [dict(zip(columns, row)) for row in result]
     
     @query_method(
-        name="get_minute_stats",
         description="获取分钟K线数据的统计信息",
         params=[
             QueryParam(name="freq", type="str", required=False, description="K线频率")
