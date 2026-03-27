@@ -10,6 +10,9 @@ class RtKService(BaseService):
     """Query service for realtime K-line data."""
     
     table_name = "ods_rt_k"
+
+	def __init__(self, plugin_name: str = "tushare_rt_k"): 
+        super().__init__(plugin_name=plugin_name)    
     
     @query_method(
         description="获取指定股票的最新实时行情",
