@@ -404,7 +404,7 @@ class DataManageService:
             for table_name, date_col in table_date_map.items():
                 if (table_name, date_col) in existing_cols:
                     union_parts.append(
-                        f"SELECT '{table_name}' AS tbl, max({date_col}) AS latest_date FROM {table_name}"
+                        f"SELECT '{table_name}' AS tbl, toDate(max({date_col})) AS latest_date FROM {table_name}"
                     )
 
             if not union_parts:
