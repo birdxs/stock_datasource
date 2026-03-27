@@ -10,6 +10,9 @@ class RtMinService(BaseService):
     """Query service for A-share realtime minute K-line data."""
     
     table_name = "ods_rt_min"
+
+	def __init__(self, plugin_name: str = "tushare_rt_min"): 
+        super().__init__(plugin_name=plugin_name)    
     
     @query_method(
         description="获取指定股票的最新分钟K线数据",
