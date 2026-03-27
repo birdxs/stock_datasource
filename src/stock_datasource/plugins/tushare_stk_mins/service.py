@@ -10,6 +10,9 @@ class StkMinsService(BaseService):
     """Query service for A股历史分钟行情 data."""
     
     table_name = "ods_stk_mins"
+
+    def __init__(self, plugin_name: str = "tushare_stk_mins"): 
+        super().__init__(plugin_name=plugin_name)   
     
     @query_method(
         description="获取指定股票的分钟K线数据",
