@@ -11,6 +11,9 @@ class IdxMinsService(BaseService):
     
     table_name = "ods_min_kline_index"
     
+    def __init__(self, plugin_name: str = "tushare_idx_mins"):
+        super().__init__(plugin_name=plugin_name)
+    
     @query_method(
         description="获取指定指数的分钟K线数据",
         params=[
