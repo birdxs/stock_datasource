@@ -10,6 +10,9 @@ class StockCompanyService(BaseService):
     
     table_name = "ods_stock_company"
     
+    def __init__(self, plugin_name: str = "tushare_stock_company"): 
+        super().__init__(plugin_name=plugin_name)
+    
     @query_method(
         description="获取指定股票的公司基础信息",
         params=[
