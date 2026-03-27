@@ -11,7 +11,7 @@ class RtMinService(BaseService):
     
     table_name = "ods_rt_min"
 
-	def __init__(self, plugin_name: str = "tushare_rt_min"): 
+    def __init__(self, plugin_name: str = "tushare_rt_min"): 
         super().__init__(plugin_name=plugin_name)    
     
     @query_method(
